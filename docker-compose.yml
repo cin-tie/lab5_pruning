@@ -1,0 +1,7 @@
+version: "3.8"
+services:
+  raster-demo:
+    build: .
+    ports:
+      - "5000"
+    restart: unless-stopped

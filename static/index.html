@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Лаб. работа 5 — вариант 7</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <h1>Вариант 7 — Сазерленд-Коэн & отсечение выпуклого многоугольника</h1>
+
+    <div class="controls">
+      <textarea id="input" rows="8" placeholder="Вставьте данные в формате (пример в README)..."></textarea>
+      <div class="row">
+        <button id="parseBtn">Загрузить и показать</button>
+        <button id="clipBtn">Отсечь (запрос на сервер)</button>
+        <button id="exampleBtn">Пример</button>
+      </div>
+      <div id="info"></div>
+    </div>
+
+    <canvas id="canvas" width="900" height="600"></canvas>
+    <div class="legend">
+      <div><span class="box window"></span> Окно отсечения</div>
+      <div><span class="box seg"></span> Исходные отрезки</div>
+      <div><span class="box seg-clipped"></span> Отсечённые отрезки</div>
+      <div><span class="box poly"></span> Исходный многоугольник</div>
+      <div><span class="box poly-clipped"></span> Отсечённый многоугольник</div>
+    </div>
+  </div>
+  <script src="script.js"></script>
+</body>
+</html>
