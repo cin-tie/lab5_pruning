@@ -1,166 +1,292 @@
 const inputEl = document.getElementById('input');
-const parseBtn = document.getElementById('parseBtn');
-const clipBtn = document.getElementById('clipBtn');
-const exampleBtn = document.getElementById('exampleBtn');
-const info = document.getElementById('info');
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
+const info = document.getElementById('info');
+
+const btnExample = document.getElementById('btnExample');
+const btnDraw = document.getElementById('btnDraw');
+const btnClip = document.getElementById('btnClip');
+const btnClear = document.getElementById('btnClear');
 
 let state = {
   segments: [],
   polygon: [],
-  window: [0,0,100,100],
-  scale: 1,
-  offsetX: 50,
-  offsetY: 50
+  window: [],
+  clippedSegments: [],
+  clippedPolygon: []
 };
 
-function parseInputText(text){
-  const tokens = text.trim().split(/\s+/).map(Number).filter(x=>!isNaN(x));
-  if(tokens.length < 5) return null;
-  const n = Math.floor(tokens[0]);
-  let idx = 1;
-  const segs = [];
-  for(let i=0;i<n;i++){
-    if(idx+3 >= tokens.length) break;
-    segs.push([tokens[idx], tokens[idx+1], tokens[idx+2], tokens[idx+3]]);
-    idx += 4;
-  }
-  if(idx+3 >= tokens.length) return {segments:segs, polygon:[], window:[0,0,100,100]};
-  const xmin = tokens[idx], ymin = tokens[idx+1], xmax = tokens[idx+2], ymax = tokens[idx+3];
-  return {segments:segs, polygon:[], window:[xmin,ymin,xmax,ymax]};
+const INSIDE = 0, LEFT = 1, RIGHT = 2, BOTTOM = 4, TOP = 8;
+
+function computeOutCode(x, y, xmin, ymin, xmax, ymax) {
+  let code = INSIDE;
+  if (x < xmin) code |= LEFT;
+  else if (x > xmax) code |= RIGHT;
+  if (y < ymin) code |= BOTTOM;
+  else if (y > ymax) code |= TOP;
+  return code;
 }
 
-function drawAll(clippedSegments=[], clippedPolygon=[]){
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-  const allX = [];
-  const allY = [];
-  state.segments.forEach(s => { allX.push(s[0], s[2]); allY.push(s[1], s[3]); });
+function cohenSutherland(x1, y1, x2, y2, xmin, ymin, xmax, ymax) {
+  let outcode1 = computeOutCode(x1, y1, xmin, ymin, xmax, ymax);
+  let outcode2 = computeOutCode(x2, y2, xmin, ymin, xmax, ymax);
+  let accept = false;
+
+  while (true) {
+    if ((outcode1 | outcode2) === 0) {
+      accept = true;
+      break;
+    } else if (outcode1 & outcode2) {
+      break;
+    } else {
+      let x, y;
+      let outcodeOut = outcode1 ? outcode1 : outcode2;
+
+      if (outcodeOut & TOP) {
+        x = x1 + (x2 - x1) * (ymax - y1) / (y2 - y1);
+        y = ymax;
+      } else if (outcodeOut & BOTTOM) {
+        x = x1 + (x2 - x1) * (ymin - y1) / (y2 - y1);
+        y = ymin;
+      } else if (outcodeOut & RIGHT) {
+        y = y1 + (y2 - y1) * (xmax - x1) / (x2 - x1);
+        x = xmax;
+      } else if (outcodeOut & LEFT) {
+        y = y1 + (y2 - y1) * (xmin - x1) / (x2 - x1);
+        x = xmin;
+      }
+
+      if (outcodeOut === outcode1) {
+        x1 = x; y1 = y; outcode1 = computeOutCode(x1, y1, xmin, ymin, xmax, ymax);
+      } else {
+        x2 = x; y2 = y; outcode2 = computeOutCode(x2, y2, xmin, ymin, xmax, ymax);
+      }
+    }
+  }
+
+  return accept ? [x1, y1, x2, y2] : null;
+}
+
+
+function inside(p, edge, rect) {
+  const [x, y] = p;
+  const [xmin, ymin, xmax, ymax] = rect;
+  switch (edge) {
+    case 'left': return x >= xmin;
+    case 'right': return x <= xmax;
+    case 'bottom': return y >= ymin;
+    case 'top': return y <= ymax;
+  }
+  return true;
+}
+
+function intersection(p1, p2, edge, rect) {
+  const [x1, y1] = p1;
+  const [x2, y2] = p2;
+  const [xmin, ymin, xmax, ymax] = rect;
+  let x, y;
+
+  switch (edge) {
+    case 'left':
+      x = xmin;
+      y = y1 + (y2 - y1) * (xmin - x1) / (x2 - x1);
+      break;
+    case 'right':
+      x = xmax;
+      y = y1 + (y2 - y1) * (xmax - x1) / (x2 - x1);
+      break;
+    case 'bottom':
+      y = ymin;
+      x = x1 + (x2 - x1) * (ymin - y1) / (y2 - y1);
+      break;
+    case 'top':
+      y = ymax;
+      x = x1 + (x2 - x1) * (ymax - y1) / (y2 - y1);
+      break;
+  }
+  return [x, y];
+}
+
+function sutherlandHodgman(polygon, rect) {
+  let outputList = polygon;
+  ['left', 'right', 'bottom', 'top'].forEach(edge => {
+    const inputList = outputList;
+    outputList = [];
+    if (!inputList.length) return;
+    let S = inputList[inputList.length - 1];
+
+    for (const E of inputList) {
+      if (inside(E, edge, rect)) {
+        if (inside(S, edge, rect)) {
+          outputList.push(E);
+        } else {
+          outputList.push(intersection(S, E, edge, rect));
+          outputList.push(E);
+        }
+      } else if (inside(S, edge, rect)) {
+        outputList.push(intersection(S, E, edge, rect));
+      }
+      S = E;
+    }
+  });
+  return outputList.map(([x, y]) => [parseFloat(x.toFixed(3)), parseFloat(y.toFixed(3))]);
+}
+
+function drawScene() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const allX = [], allY = [];
+  const pushCoords = arr => arr.forEach(p => { allX.push(p[0], p[2]); allY.push(p[1], p[3]); });
+  pushCoords(state.segments);
+  allX.push(state.window[0], state.window[2]);
+  allY.push(state.window[1], state.window[3]);
   state.polygon.forEach(p => { allX.push(p[0]); allY.push(p[1]); });
-  allX.push(state.window[0], state.window[2]); allY.push(state.window[1], state.window[3]);
+
   const xmin = Math.min(...allX), xmax = Math.max(...allX);
   const ymin = Math.min(...allY), ymax = Math.max(...allY);
-  const padding = 40;
-  const w = canvas.width - padding*2;
-  const h = canvas.height - padding*2;
-  const sx = (xmax - xmin) === 0 ? 1 : w / (xmax - xmin);
-  const sy = (ymax - ymin) === 0 ? 1 : h / (ymax - ymin);
-  const s = Math.min(sx, sy);
-  state.scale = s;
-  state.offsetX = padding - xmin * s;
-  state.offsetY = padding + ymax * s;
+  const s = Math.min(800 / (xmax - xmin + 1), 500 / (ymax - ymin + 1));
+  const offsetX = 450 - (xmin + xmax) / 2 * s;
+  const offsetY = 300 + (ymin + ymax) / 2 * s;
 
-  function toCanvas(pt){
-    const x = pt[0]*state.scale + state.offsetX;
-    const y = state.offsetY - pt[1]*state.scale;
-    return [x,y];
-  }
+  const toCanvas = (x, y) => [x * s + offsetX, -y * s + offsetY];
 
-  ctx.strokeStyle = "#ddd";
-  ctx.beginPath();
-  ctx.moveTo(0, state.offsetY);
-  ctx.lineTo(canvas.width, state.offsetY);
-  ctx.moveTo(state.offsetX, 0);
-  ctx.lineTo(state.offsetX, canvas.height);
-  ctx.stroke();
-
-  const [xminW,yminW,xmaxW,ymaxW] = state.window;
-  const p1 = toCanvas([xminW,yminW]);
-  const p2 = toCanvas([xmaxW,ymaxW]);
-  const wx = Math.min(p1[0], p2[0]), wy = Math.min(p2[1], p1[1]);
-  const ww = Math.abs(p2[0]-p1[0]), wh = Math.abs(p2[1]-p1[1]);
-  ctx.fillStyle = "rgba(207,232,255,0.6)";
-  ctx.fillRect(wx, wy, ww, wh);
+  const [x1, y1] = toCanvas(state.window[0], state.window[1]);
+  const [x2, y2] = toCanvas(state.window[2], state.window[3]);
+  ctx.fillStyle = "rgba(100,150,255,0.2)";
   ctx.strokeStyle = "#4a88c7";
-  ctx.strokeRect(wx, wy, ww, wh);
+  ctx.lineWidth = 2;
+  ctx.fillRect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
+  ctx.strokeRect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
 
+  ctx.strokeStyle = "#ff9999";
   ctx.lineWidth = 1.5;
-  state.segments.forEach(s => {
-    const a = toCanvas([s[0], s[1]]), b = toCanvas([s[2], s[3]]);
-    ctx.strokeStyle = "#ff6f6f";
-    ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
-  });
-
-  clippedSegments.forEach(s => {
-    const a = toCanvas([s[0], s[1]]), b = toCanvas([s[2], s[3]]);
-    ctx.strokeStyle = "#b50000";
-    ctx.lineWidth = 2.5;
-    ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
-  });
-
-  if(state.polygon && state.polygon.length>0){
+  for (const [a1, b1, a2, b2] of state.segments) {
+    const [X1, Y1] = toCanvas(a1, b1);
+    const [X2, Y2] = toCanvas(a2, b2);
     ctx.beginPath();
-    state.polygon.forEach((p,i) => {
-      const [x,y] = toCanvas(p);
-      if(i==0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
-    });
-    ctx.closePath();
-    ctx.fillStyle = "rgba(182,240,182,0.5)";
-    ctx.fill();
-    ctx.strokeStyle = "#3ea83e";
+    ctx.moveTo(X1, Y1);
+    ctx.lineTo(X2, Y2);
     ctx.stroke();
   }
 
-  if(clippedPolygon && clippedPolygon.length>0){
+  ctx.strokeStyle = "#e60000";
+  ctx.lineWidth = 2.5;
+  for (const seg of state.clippedSegments) {
+    const [X1, Y1] = toCanvas(seg[0], seg[1]);
+    const [X2, Y2] = toCanvas(seg[2], seg[3]);
     ctx.beginPath();
-    clippedPolygon.forEach((p,i) => {
-      const [x,y] = toCanvas(p);
-      if(i==0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+    ctx.moveTo(X1, Y1);
+    ctx.lineTo(X2, Y2);
+    ctx.stroke();
+  }
+
+  if (state.polygon.length > 0) {
+    ctx.beginPath();
+    state.polygon.forEach((p, i) => {
+      const [X, Y] = toCanvas(p[0], p[1]);
+      if (i === 0) ctx.moveTo(X, Y); else ctx.lineTo(X, Y);
     });
     ctx.closePath();
-    ctx.fillStyle = "rgba(0,120,0,0.3)";
+    ctx.fillStyle = "rgba(183,245,183,0.4)";
+    ctx.strokeStyle = "#009000";
+    ctx.lineWidth = 1.5;
     ctx.fill();
+    ctx.stroke();
+  }
+
+  if (state.clippedPolygon.length > 0) {
+    ctx.beginPath();
+    state.clippedPolygon.forEach((p, i) => {
+      const [X, Y] = toCanvas(p[0], p[1]);
+      if (i === 0) ctx.moveTo(X, Y); else ctx.lineTo(X, Y);
+    });
+    ctx.closePath();
+    ctx.fillStyle = "rgba(0,120,0,0.4)";
     ctx.strokeStyle = "#004400";
     ctx.lineWidth = 2;
+    ctx.fill();
     ctx.stroke();
   }
 }
 
-parseBtn.onclick = ()=> {
-  const parsed = parseInputText(inputEl.value);
-  if(!parsed){
-    info.textContent = "Ошибка парсинга. См. пример в README.";
+
+function parseInput() {
+  const tokens = inputEl.value.trim().split(/\s+/).map(Number);
+  if (tokens.length < 5) return null;
+
+  let idx = 0;
+  const n = tokens[idx++];
+  const segs = [];
+  for (let i = 0; i < n; i++) {
+    segs.push(tokens.slice(idx, idx + 4));
+    idx += 4;
+  }
+
+  let polygon = [];
+  if (idx < tokens.length) {
+    const m = tokens[idx++];
+    for (let i = 0; i < m; i++) {
+      polygon.push(tokens.slice(idx, idx + 2));
+      idx += 2;
+    }
+  }
+
+  const win = tokens.slice(idx, idx + 4);
+  idx += 4;
+
+  return { segments: segs, window: win, polygon };
+}
+
+btnExample.onclick = () => {
+  inputEl.value =
+`5
+-10 20 50 -30
+-50 0 80 0
+0 -40 0 60
+-80 -20 -20 80
+30 30 120 120
+5
+-60 -10
+-10 70
+50 60
+90 10
+30 -40
+-40 -40 40 40`;
+  info.textContent = "Пример загружен.";
+};
+
+btnDraw.onclick = () => {
+  const parsed = parseInput();
+  if (!parsed) {
+    info.textContent = "Ошибка ввода данных.";
     return;
   }
   state.segments = parsed.segments;
-  state.polygon = parsed.polygon || [];
   state.window = parsed.window;
-  info.textContent = `Загружено ${state.segments.length} отрезков. Окно: ${state.window.join(', ')}`;
-  drawAll();
+  state.polygon = parsed.polygon || [];
+  state.clippedSegments = [];
+  state.clippedPolygon = [];
+  drawScene();
+  info.textContent = `Отрисовано ${state.segments.length} отрезков, вершин многоугольника: ${state.polygon.length}.`;
 };
 
-clipBtn.onclick = async ()=> {
-  try {
-    const resp = await fetch('/api/clip', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({
-        segments: state.segments,
-        polygon: state.polygon,
-        window: state.window
-      })
-    });
-    const data = await resp.json();
-    if(resp.ok){
-      drawAll(data.clipped_segments, data.clipped_polygon);
-      info.textContent = `Отсечение выполнено. Отсечённых отрезков: ${data.clipped_segments.length}. Полигон вершин: ${data.clipped_polygon.length}`;
-    } else {
-      info.textContent = 'Ошибка: ' + JSON.stringify(data);
-    }
-  } catch(e){
-    info.textContent = 'Ошибка обращения к серверу: ' + e;
-  }
+
+btnClip.onclick = () => {
+  const [xmin, ymin, xmax, ymax] = state.window;
+
+  state.clippedSegments = state.segments.map(s =>
+    cohenSutherland(...s, xmin, ymin, xmax, ymax)
+  ).filter(Boolean);
+
+  state.clippedPolygon = sutherlandHodgman(state.polygon, state.window);
+
+  drawScene();
+  info.textContent = `Отсечено ${state.clippedSegments.length} отрезков, полигон: ${state.clippedPolygon.length} вершин.`;
 };
 
-exampleBtn.onclick = ()=>{
-  inputEl.value = `5
--10 20  50 -30
--50 0   80 0
-0  -40 0  60
--80 -20 -20 80
-30 30  120 120
--40 -40 40 40`;
-  state.polygon = [[-60,-10],[-10,70],[50,60],[90,10],[30,-40]];
-  parseBtn.click();
-  drawAll();
+btnClear.onclick = () => {
+  inputEl.value = "";
+  state = { segments: [], polygon: [], window: [-40, -40, 40, 40], clippedSegments: [], clippedPolygon: [] };
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  info.textContent = "Поле очищено.";
 };

@@ -1,7 +1,11 @@
-version: "3.8"
+version: '3.8'
+
 services:
-  raster-demo:
+  lab5:
+    container_name: lab5_variant7
     build: .
     ports:
-      - "5000"
+      - "5000:5000"
+    environment:
+      - PORT=5000
     restart: unless-stopped
